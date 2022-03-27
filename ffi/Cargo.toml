@@ -1,0 +1,14 @@
+[package]
+name = "libsqlit"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nom = "7.1.1"
+anyhow = "1.0.56"
+eyre = "0.6.7"
+color-eyre = "0.6.1"
+
+[lib]
+name = "sqlit"
+crate_type = ["dylib"]
