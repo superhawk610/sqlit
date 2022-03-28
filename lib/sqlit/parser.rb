@@ -73,8 +73,6 @@ module Sqlit
 
         Sqlit::SelectQuery.new(table: table, fields: args)
       when "insert"
-        todo!
-      when "update"
         k_into, table, k_values = args.shift(3)
         raise ParseError, "expected `into` clause" unless k_into == "into"
         raise ParseError, "expected `values` to be provided" unless k_values == "values"
@@ -87,6 +85,8 @@ module Sqlit
         end
 
         Sqlit::InsertQuery.new(table: table, values: Hash[values])
+      when "update"
+        todo!
       when "delete"
         todo!
       when "create"
