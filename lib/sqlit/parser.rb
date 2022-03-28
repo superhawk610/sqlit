@@ -65,7 +65,7 @@ module Sqlit
     def self.parse(input)
       raise ParseError, "no input" if input.empty?
 
-      command, *args = input.chomp(";").split(" ")
+      command, *args = input.downcase.chomp(";").split(" ")
       case command
       when "select"
         k_from, table = args.pop(2)
