@@ -1,15 +1,18 @@
 use crate::database::{Column, ColumnType, Table, Value};
 use crate::error::SQLitError;
-use nom::error::{ErrorKind, ParseError};
+use nom::bytes::complete::is_not;
+use nom::character::complete::digit1;
+use nom::combinator::{all_consuming, map_res, recognize};
+use nom::error::{ErrorKind, FromExternalError, ParseError};
 use nom::sequence::tuple;
 use nom::{
     branch::{alt, permutation},
     bytes::complete::{tag, tag_no_case, take_while1},
     character::{
-        complete::{multispace0, multispace1},
+        complete::{alpha1, multispace0, multispace1},
         is_alphanumeric,
     },
-    combinator::{all_consuming, map, opt},
+    combinator::{map, opt, peek},
     multi::{separated_list0, separated_list1},
     sequence::{delimited, preceded, terminated},
     IResult as NomResult,
@@ -30,6 +33,12 @@ impl<I> ParseError<I> for QueryError<I> {
 
     fn append(_: I, _: ErrorKind, other: Self) -> Self {
         other
+    }
+}
+
+impl<I, E> FromExternalError<I, E> for QueryError<I> {
+    fn from_external_error(input: I, kind: ErrorKind, e: E) -> Self {
+        todo!()
     }
 }
 
@@ -74,8 +83,20 @@ fn quoted_ident(i: &str) -> IResult<&str, &str> {
     delimited(opt(tag("\"")), ident, opt(tag("\"")))(i)
 }
 
+// TODO: this needs more robust numeric/string literal support
+// see: https://github.com/Geal/nom/blob/main/examples/string.rs
+// see: https://docs.rs/nom/latest/nom/recipes/index.html#floating-point-numbers
 fn value(i: &str) -> IResult<&str, Value> {
-    todo!()
+    alt((
+        map(delimited(tag("'"), is_not("'"), tag("'")), |s: &str| {
+            Value::Text(s.to_string())
+        }),
+        map_res(
+            recognize(tuple((digit1, tag("."), opt(digit1)))),
+            |s: &str| s.parse().map(Value::Real),
+        ),
+        map_res(recognize(digit1), |s: &str| s.parse().map(Value::Integer)),
+    ))(i)
 }
 
 fn column_type(i: &str) -> IResult<&str, ColumnType> {
@@ -116,7 +137,7 @@ fn column(i: &str) -> IResult<&str, (Column, bool, bool)> {
         multispace1,
         permutation((
             // PRIMARY KEY ( AUTOINCREMENT )?
-            map(
+            opt(map(
                 tuple((
                     keyword("primary"),
                     multispace1,
@@ -127,21 +148,21 @@ fn column(i: &str) -> IResult<&str, (Column, bool, bool)> {
                     primary_key = true;
                     autoincrement = k_autoincrement.is_some();
                 },
-            ),
+            )),
             // DEFAULT <value>
-            map(
+            opt(map(
                 tuple((keyword("default"), multispace1, value)),
                 |(_, _, v)| column.default = Some(v),
-            ),
+            )),
             // NOT NULL
-            map(
+            opt(map(
                 tuple((keyword("not"), multispace1, keyword("null"))),
                 |_| column.allow_null = false,
-            ),
+            )),
             // UNIQUE
-            map(keyword("unique"), |_| {
+            opt(map(keyword("unique"), |_| {
                 column.unique = true;
-            }),
+            })),
         )),
     )(i)?;
 
@@ -193,8 +214,11 @@ fn parse_create(i: &str) -> IResult<&str, Query> {
     ))(i)?;
     let (i, name) = quoted_ident(i)?;
     let (i, _) = multispace1(i)?;
-    let (i, (columns, primary_key, autoincrement)) =
-        delimited(tag("("), parse_create_columns, tag(")"))(i)?;
+    let (i, (columns, primary_key, autoincrement)) = delimited(
+        terminated(tag("("), multispace0),
+        parse_create_columns,
+        preceded(multispace0, tag(")")),
+    )(i)?;
     let (i, _) = opt(preceded(multispace0, tag(";")))(i)?;
 
     let table = Table::new(name.to_string(), columns, primary_key, autoincrement);
@@ -249,9 +273,17 @@ fn parse_select(i: &str) -> IResult<&str, Query> {
 impl Query {
     pub fn parse(input: &str) -> Result<Self, SQLitError> {
         let input = input.trim();
-        // FIXME: `alt` won't work here, since we don't want to try other parsers
-        // if an earlier matches and fails validation
-        match all_consuming(alt((parse_select, parse_create)))(input) {
+        let (_, command) = map(peek(alpha1), |s: &str| s.to_ascii_lowercase())(input).map_err(
+            |_: nom::Err<nom::error::Error<&str>>| SQLitError::InvalidQuery("empty input".into()),
+        )?;
+
+        let parser = match command.as_ref() {
+            "select" => parse_select,
+            "create" => parse_create,
+            _ => return Err(SQLitError::InvalidQuery("unrecognized input".into())),
+        };
+
+        match all_consuming(parser)(input) {
             Ok((_, query)) => Ok(query),
             Err(err) => Err(SQLitError::InvalidQuery(format!("{:?}", err))),
         }
