@@ -5,9 +5,9 @@ edition = "2021"
 
 [dependencies]
 nom = { version = "7.1.1", features = ["alloc"] }
-anyhow = "1.0.56"
 eyre = "0.6.7"
 color-eyre = "0.6.1"
+thiserror = "1.0.30"
 
 [lib]
 name = "sqlit"
