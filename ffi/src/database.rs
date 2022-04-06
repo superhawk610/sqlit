@@ -1,5 +1,5 @@
 use crate::error::SQLitError;
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct Database {
@@ -40,9 +40,11 @@ pub enum ColumnType {
     Blob,
 }
 
-pub struct Rows(Vec<Vec<Value>>);
+pub struct Rows(Vec<Vec<Option<Value>>>);
 
-#[derive(Debug)]
+pub struct RowView<'a>(Vec<Vec<&'a Option<Value>>>);
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Integer(i64),
     Text(String),
@@ -99,5 +101,81 @@ impl Table {
             primary_key,
             autoincrement,
         }
+    }
+
+    pub fn insert<'a, V: 'a>(&mut self, values: V) -> Result<(), SQLitError>
+    where
+        V: IntoIterator<Item = (&'a str, Value)>,
+    {
+        let mut values: HashMap<&'a str, Value> = HashMap::from_iter(values.into_iter());
+        let mut row = Vec::with_capacity(self.columns.len());
+
+        for column in &self.columns {
+            let value = values
+                .remove(&column.name[..])
+                .or_else(|| column.default.clone());
+            row.push(value);
+
+            // TODO: column type must match
+            // TODO: enforce unique constraint
+            // TODO: autoincrement
+        }
+
+        self.rows.0.push(row);
+
+        Ok(())
+    }
+
+    pub fn select<'c, 't, C: 'c>(&'t self, columns: C) -> RowView<'t>
+    where
+        C: IntoIterator<Item = &'c str>,
+    {
+        let columns: HashSet<&'c str> = HashSet::from_iter(columns.into_iter());
+
+        RowView(
+            self.rows
+                .0
+                .iter()
+                .map(|row| {
+                    self.columns
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| columns.contains(&c.name[..]))
+                        .map(|(i, _)| {
+                            // Safety: Each row in `self.rows` is guaranteed to have the same length
+                            // as `self.columns`, as an invariant.
+                            unsafe { row.get_unchecked(i) }
+                        })
+                        .collect()
+                })
+                .collect(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_table_insert_and_select() {
+        let columns = vec![Column {
+            name: "id".to_string(),
+            t: ColumnType::Integer,
+            default: None,
+            allow_null: false,
+            unique: true,
+        }];
+        let mut table = Table::new("users".to_string(), columns, 0, true);
+
+        // inserting a single row
+        table.insert(vec![("id", Value::Integer(1))]).unwrap();
+        assert_eq!(table.rows.0.len(), 1);
+
+        // querying for a single row
+        let rows = table.select(vec!["id"]);
+        assert_eq!(rows.0.len(), 1);
+        assert_eq!(rows.0[0].len(), 1);
+        assert_eq!(rows.0[0][0], &Some(Value::Integer(1)));
     }
 }

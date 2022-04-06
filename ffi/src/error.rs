@@ -24,4 +24,6 @@ pub enum SQLitError {
     // query execution
     #[error("table `{0}` already exists")]
     TableAlreadyExists(String),
+    #[error("unable to insert: {0}")]
+    InvalidInsert(String),
 }
